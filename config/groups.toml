@@ -1,0 +1,4 @@
+
+[students]
+dn = "CN=MLU Student,OU=MLU Global,OU=Uni-Halle,DC=xd,DC=uni-halle,DC=de"
+function = "groups_pkg.students"
