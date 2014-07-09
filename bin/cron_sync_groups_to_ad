@@ -1,0 +1,12 @@
+#!/usr/bin/env ruby
+# encoding: utf-8
+
+
+# (&(objectClass=user)(memberof:1.2.840.113556.1.4.1941:=CN=INF Pool Anmeldung,OU=Gruppen,OU=INF Informatik,OU=Uni-Halle,DC=xd,DC=uni-halle,DC=de))
+
+require 'thor'
+
+class CronSyncGroupsToAD < Thor
+end
+
+CronSyncGroupsToAD.start
