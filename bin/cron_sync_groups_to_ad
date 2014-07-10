@@ -1,12 +1,43 @@
 #!/usr/bin/env ruby
 # encoding: utf-8
 
-
 # (&(objectClass=user)(memberof:1.2.840.113556.1.4.1941:=CN=INF Pool Anmeldung,OU=Gruppen,OU=INF Informatik,OU=Uni-Halle,DC=xd,DC=uni-halle,DC=de))
 
+require 'active_support'
+require 'active_support/core_ext'
+require 'awesome_print'
+require 'ruby-plsql'
 require 'thor'
+require 'toml'
 
 class CronSyncGroupsToAD < Thor
+
+  desc 'sync','synchronize group GROUPNAME'
+  def sync
+  end
+
+  desc 'list','list all group which could be synchronize'
+  def list
+    read_config_file
+    @config.keys.sort.map { |key| puts key }
+  end
+
+
+private
+  def read_config_file
+    config_file = File.expand_path('../../config/groups.toml', __FILE__)
+
+    unless File.exist? config_file
+      abort error_message("Config file config/groups.toml not Found")
+    end
+
+    @config = TOML.load_file(config_file).deep_symbolize_keys
+  end
+
+  def error_message message
+    "[" + "error".red + "] #{message}"
+  end
+
 end
 
 CronSyncGroupsToAD.start
