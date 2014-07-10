@@ -2,3 +2,8 @@
 [students]
 dn = "CN=MLU Student,OU=MLU Global,OU=Uni-Halle,DC=xd,DC=uni-halle,DC=de"
 function = "groups_pkg.students"
+
+[mitarbeiter]
+dn = "CN=MLU Mitarbeiter,OU=MLU Global,OU=Uni-Halle,DC=xd,DC=uni-halle,DC=de"
+function = "groups_pkg.employee"
+
