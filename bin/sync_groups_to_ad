@@ -6,6 +6,9 @@
 require 'active_support'
 require 'active_support/core_ext'
 require 'awesome_print'
+require 'dotenv'
+require 'net/ldap'
+require 'redis'
 require 'ruby-plsql'
 require 'thor'
 require 'toml'
@@ -22,8 +25,29 @@ class CronSyncGroupsToAD < Thor
     @config.keys.sort.map { |key| puts key }
   end
 
-
 private
+  def connect_redis
+    @redis = Redis.new
+  end
+
+  def connect_idm
+    plsql.connection ||= OCI8.new(
+      ENV.fetch('UMT_USER'),
+      ENV.fetch('UMT_PASSWORD'),
+      ENV.fetch('UMT_SID'))
+  end
+
+  def connect_ldap
+    unless @ldap
+      @ldap ||= Net::LDAP.new
+      @ldap.host = ENV.fetch('AD_ITZ_HOST')
+      @ldap.port = 636
+      @ldap.encryption :simple_tls
+      @ldap.auth ENV.fetch('AD_ITZ_USER'), ENV.fetch('AD_ITZ_PASSWORD')
+    end
+  end
+
+
   def read_config_file
     config_file = File.expand_path('../../config/groups.toml', __FILE__)
 
@@ -32,6 +56,15 @@ private
     end
 
     @config = TOML.load_file(config_file).deep_symbolize_keys
+  end
+
+  def fetch_group_members_from_ad
+  end
+
+  def fetch_all_users_from_ad
+  end
+
+  def fetch_group_from_idm
   end
 
   def error_message message
