@@ -1,9 +1,9 @@
 
-[students]
-dn = "CN=MLU Student,OU=MLU Global,OU=Uni-Halle,DC=xd,DC=uni-halle,DC=de"
-function = "groups_pkg.students"
+[studenten]
+filter = "CN=MLU Student,OU=MLU Global,OU=Uni-Halle,DC=xd,DC=uni-halle,DC=de"
+groupName = "studenten"
 
 [mitarbeiter]
-dn = "CN=MLU Mitarbeiter,OU=MLU Global,OU=Uni-Halle,DC=xd,DC=uni-halle,DC=de"
-function = "groups_pkg.employee"
+filter = "CN=MLU Mitarbeiter,OU=MLU Global,OU=Uni-Halle,DC=xd,DC=uni-halle,DC=de"
+groupName = "mitarbeiter"
 
