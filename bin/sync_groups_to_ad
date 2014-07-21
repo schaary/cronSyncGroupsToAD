@@ -13,10 +13,53 @@ require 'ruby-plsql'
 require 'thor'
 require 'toml'
 
-class CronSyncGroupsToAD < Thor
+class SyncGroupsToAD < Thor
+
+  LDAP_UID_SET = 'groups:s_uid_ldap'; LDAP_UID_SET.freeze
+  LDAP_GROUP_MEMBERS_SET = 'groups:s_ldap_group_members'; LDAP_GROUP_MEMBERS_SET.freeze
+  LDAP_DN_BY_UID_HASH = 'groups:h_dn_by_uid'; LDAP_DN_BY_UID_HASH.freeze
+  IDM_GROUP_MEMBERS_SET = 'groups:s_idm_group_members'; IDM_GROUP_MEMBERS_SET.freeze
+  DELTA_UID_SET = 'groups:s_uid_delta'; DELTA_UID_SET.freeze
+  DELTA_MISSING_MEMBERS_SET = 'groups:s_missing_members'; DELTA_MISSING_MEMBERS_SET.freeze
 
   desc 'sync','synchronize group GROUPNAME'
+  method_option :group, :type => :string, :required => true
   def sync
+    cleanup_redis_db
+    read_config_file
+    get_group_config options['group']
+
+
+    fork do
+      fetch_idm_group_members
+    end
+    fork do
+      fetch_ad_uids
+    end
+    fork do
+      fetch_ad_group_members
+    end
+
+    Process.waitall
+
+    adjust_to_feasible_members
+
+    new_counter = 0
+    missing_members.map do |entry|
+      add_to_group entry
+      puts "neu: #{entry}"
+      new_counter += 1
+    end
+
+    old_counter = 0
+    obsolete_members.map do |entry|
+      delete_from_group entry
+      puts "raus: #{entry}"
+      old_counter += 1
+    end
+
+    puts "#{new_counter} neue Mitglieder in die Gruppe eingetragen"
+    puts "#{old_counter} obsolete Mitglieder aus der Gruppe entfernt"
   end
 
   desc 'list','list all group which could be synchronize'
@@ -47,6 +90,59 @@ private
     end
   end
 
+  def cleanup_redis_db
+    connect_redis
+    @redis.del LDAP_UID_SET
+    @redis.del LDAP_GROUP_MEMBERS_SET
+    @redis.del LDAP_DN_BY_UID_HASH
+    @redis.del IDM_GROUP_MEMBERS_SET
+    @redis.del DELTA_UID_SET
+    @redis.del DELTA_MISSING_MEMBERS_SET
+  end
+
+  def fetch_ad_group_members
+    connect_ldap
+    connect_redis
+
+    filter = Net::LDAP::Filter.construct(
+      "(&(objectCategory=user)(memberof:1.2.840.113556.1.4.1941:=#{@local_config[:filter]}))"
+    )
+    basedn = 'dc=xd,dc=uni-halle,dc=de'
+    attributes = ['sAMAccountName']
+
+    protected_user = %w(admin Administrator krbtgt Gast UNI-HALLE.DE$ TAC001)
+
+    counter = 0
+    @ldap.search(base: basedn, filter: filter, attributes: attributes) do |entry|
+      unless protected_user.include? entry[:sAMAccountName][0]
+        @redis.sadd LDAP_GROUP_MEMBERS_SET, entry[:sAMAccountName][0]
+        counter += 1
+      end
+    end
+    puts "#{counter} Gruppenmitglieder aus dem AD eingelesen"
+  end
+
+  def fetch_ad_uids
+    connect_ldap
+    connect_redis
+
+    filter = "(objectCategory=user)"
+    basedn = 'dc=xd,dc=uni-halle,dc=de'
+    attributes = ['sAMAccountName','dn']
+
+    protected_user = %w(admin Administrator krbtgt Gast UNI-HALLE.DE$ TAC001)
+
+    counter = 0
+    @ldap.search(base: basedn, filter: filter, attributes: attributes) do |entry|
+      unless protected_user.include? entry[:sAMAccountName][0]
+        @redis.sadd LDAP_UID_SET, entry[:sAMAccountName][0]
+        @redis.hset LDAP_DN_BY_UID_HASH, entry[:sAMAccountName][0], entry[:dn][0]
+        counter += 1
+      end
+    end
+
+    puts "#{counter} Accounts eingelesen"
+  end
 
   def read_config_file
     config_file = File.expand_path('../../config/groups.toml', __FILE__)
@@ -58,13 +154,91 @@ private
     @config = TOML.load_file(config_file).deep_symbolize_keys
   end
 
-  def fetch_group_members_from_ad
+  def get_group_config group
+    if @config.has_key? group.to_sym
+      @local_config = @config[group.to_sym]
+    else
+      abort error_message("your group #{group} is not defined " +
+                          "in config/groups.toml - use\n\n" +
+                          "    sync_groups_to_ad list \n\n"+
+                          "to get the available groups.")
+    end
+
+    [:filter, :groupName].map do |symbol|
+      unless @local_config.has_key? symbol.to_s.to_sym
+        abort(
+          error_message "the key '#{symbol}' is missing in config/groups/toml"
+        )
+      end
+    end
   end
 
-  def fetch_all_users_from_ad
+  def fetch_idm_group_members
+    connect_idm
+    connect_redis
+
+    records = nil
+    plsql.export_groups_pkg.fetch_group(@local_config[:groupName]) do |cursor|
+      records = cursor.fetch_all
+    end
+
+    counter = 0
+    records.map do |record|
+      @redis.sadd IDM_GROUP_MEMBERS_SET, record[0]
+      counter += 1
+    end
+
+    puts "#{counter} Gruppenmitglieder aus dem IDM kopiert"
   end
 
-  def fetch_group_from_idm
+  def add_to_group uid
+    connect_redis
+    connect_ldap
+
+    dn = @local_config[:filter]
+    account_dn = @redis.hget LDAP_DN_BY_UID_HASH, uid
+
+    operations = [ [:add, :member, account_dn] ]
+
+    unless @ldap.modify dn: dn, operations: operations
+      puts "Result: #{@ldap.get_operation_result.code}"
+      puts "Message: #{@ldap.get_operation_result.message}"
+    end
+  end
+
+  def delete_from_group uid
+    connect_redis
+    connect_ldap
+
+    dn = @local_config[:filter]
+    account_dn = @redis.hget LDAP_DN_BY_UID_HASH, uid
+
+    operations = [ [:delete, :member, account_dn] ]
+
+    unless @ldap.modify dn: dn, operations: operations
+      puts "Result: #{@ldap.get_operation_result.code}"
+      puts "Message: #{@ldap.get_operation_result.message}"
+    end
+  end
+
+  def adjust_to_feasible_members
+    @redis.sinterstore DELTA_UID_SET, LDAP_UID_SET, IDM_GROUP_MEMBERS_SET
+  end
+
+  def missing_members
+    @redis.sdiffstore(
+      DELTA_MISSING_MEMBERS_SET,
+      DELTA_UID_SET,
+      LDAP_GROUP_MEMBERS_SET
+    )
+    @redis.smembers DELTA_MISSING_MEMBERS_SET
+  end
+
+  def obsolete_members
+    @redis.sdiff(
+      @redis.sunion(DELTA_MISSING_MEMBERS_SET, LDAP_GROUP_MEMBERS_SET),
+      DELTA_UID_SET
+    )
   end
 
   def error_message message
@@ -73,4 +247,4 @@ private
 
 end
 
-CronSyncGroupsToAD.start
+SyncGroupsToAD.start
