@@ -1,5 +1,5 @@
-Dieser Cronjob synchronisiert die Gruppen aus dem Nutzerprojekt in die AD von
-Maik Bühnemann.
+# Synchronization of basic groups from the IDM to the ITZ Active Directory
 
-Die Synchronisation erfolgt Fehlertolerant, d.h. es werden nur die Accounts
-berücksichtigt, die jeweils aktuell in der AD vorhanden sind.
+This cronjob synchronize basic groups from the Identity Management System of
+the ITZ to the main Active Directory of the ITZ. 
+
