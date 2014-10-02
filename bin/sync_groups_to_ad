@@ -8,6 +8,7 @@ require 'active_support/core_ext'
 require 'awesome_print'
 require 'dotenv'
 require 'net/ldap'
+#require 'pry'
 require 'redis'
 require 'ruby-plsql'
 require 'thor'
@@ -15,12 +16,33 @@ require 'toml'
 
 class SyncGroupsToAD < Thor
 
-  LDAP_UID_SET = 'groups:s_uid_ldap'; LDAP_UID_SET.freeze
-  LDAP_GROUP_MEMBERS_SET = 'groups:s_ldap_group_members'; LDAP_GROUP_MEMBERS_SET.freeze
-  LDAP_DN_BY_UID_HASH = 'groups:h_dn_by_uid'; LDAP_DN_BY_UID_HASH.freeze
-  IDM_GROUP_MEMBERS_SET = 'groups:s_idm_group_members'; IDM_GROUP_MEMBERS_SET.freeze
-  DELTA_UID_SET = 'groups:s_uid_delta'; DELTA_UID_SET.freeze
-  DELTA_MISSING_MEMBERS_SET = 'groups:s_missing_members'; DELTA_MISSING_MEMBERS_SET.freeze
+  LDAP_UID_SET = 'groups:s_uid_ldap'
+  LDAP_UID_SET.freeze
+
+  LDAP_GROUP_MEMBERS_SET = 'groups:s_ldap_group_members'
+  LDAP_GROUP_MEMBERS_SET.freeze
+
+  LDAP_DN_BY_UID_HASH = 'groups:h_dn_by_uid'
+  LDAP_DN_BY_UID_HASH.freeze
+
+  IDM_GROUP_MEMBERS_SET = 'groups:s_idm_group_members'
+  IDM_GROUP_MEMBERS_SET.freeze
+
+  DELTA_UID_SET = 'groups:s_uid_delta'
+  DELTA_UID_SET.freeze
+
+  DELTA_MISSING_MEMBERS_SET = 'groups:s_missing_members'
+  DELTA_MISSING_MEMBERS_SET.freeze
+
+  DELTA_INTER_LDAP_IDM = 'groups:s_intersection_ldap_idm'
+  DELTA_INTER_LDAP_IDM.freeze
+
+  DELTA_FEASIBLE_MEMBERS_MINUS_LDAP_GROUP_MEMBERS_SET =
+    'groups:s_feasible_members_minus_ldap_members_set'
+  DELTA_FEASIBLE_MEMBERS_MINUS_LDAP_GROUP_MEMBERS_SET.freeze
+
+  DELTA_LDAP_GROUP_MEMBERS_SET = 'groups:s_delta_ldap_group_members'
+  DELTA_LDAP_GROUP_MEMBERS_SET.freeze
 
   desc 'sync','synchronize group GROUPNAME'
   method_option :group, :type => :string, :required => true
@@ -98,6 +120,9 @@ private
     @redis.del IDM_GROUP_MEMBERS_SET
     @redis.del DELTA_UID_SET
     @redis.del DELTA_MISSING_MEMBERS_SET
+    @redis.del DELTA_INTER_LDAP_IDM
+    @redis.del DELTA_FEASIBLE_MEMBERS_MINUS_LDAP_GROUP_MEMBERS_SET
+    @redis.del DELTA_LDAP_GROUP_MEMBERS_SET
   end
 
   def fetch_ad_group_members
@@ -221,24 +246,40 @@ private
     end
   end
 
+  # Compute all Accounts, which are in the AD _and_ in the IDM or only in the
+  # AD as basis for all further computations. We won't take any consideration
+  # of accounts which are only in the IDM and not in the AD as well.
   def adjust_to_feasible_members
-    @redis.sinterstore DELTA_UID_SET, LDAP_UID_SET, IDM_GROUP_MEMBERS_SET
+    @redis.sinterstore DELTA_INTER_LDAP_IDM, LDAP_UID_SET, IDM_GROUP_MEMBERS_SET
+    @redis.sunionstore DELTA_UID_SET, LDAP_UID_SET, DELTA_INTER_LDAP_IDM
   end
 
+  # Compute the set of accounts which are missing in the AD group.
   def missing_members
     @redis.sdiffstore(
-      DELTA_MISSING_MEMBERS_SET,
+      DELTA_FEASIBLE_MEMBERS_MINUS_LDAP_GROUP_MEMBERS_SET,
       DELTA_UID_SET,
       LDAP_GROUP_MEMBERS_SET
     )
+
+    @redis.sinterstore(
+      DELTA_MISSING_MEMBERS_SET,
+      DELTA_FEASIBLE_MEMBERS_MINUS_LDAP_GROUP_MEMBERS_SET,
+      IDM_GROUP_MEMBERS_SET
+    )
+
     @redis.smembers DELTA_MISSING_MEMBERS_SET
   end
 
+  # Compute the accounts in the AD, which should not be member of the AD group
+  # any more.
   def obsolete_members
-    @redis.sdiff(
-      @redis.sunion(DELTA_MISSING_MEMBERS_SET, LDAP_GROUP_MEMBERS_SET),
-      DELTA_UID_SET
+    @redis.sunionstore(
+      DELTA_LDAP_GROUP_MEMBERS_SET,
+      DELTA_MISSING_MEMBERS_SET,
+      LDAP_GROUP_MEMBERS_SET
     )
+    @redis.sdiff DELTA_LDAP_GROUP_MEMBERS_SET, IDM_GROUP_MEMBERS_SET
   end
 
   def error_message message
