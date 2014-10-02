@@ -7,3 +7,7 @@ groupName = "studenten"
 filter = "CN=MLU Mitarbeiter,OU=MLU Global,OU=Uni-Halle,DC=xd,DC=uni-halle,DC=de"
 groupName = "mitarbeiter"
 
+[befunddatenbank]
+filter = "CN=MED Anmeldung Befunddatenbank,OU=Gruppen,OU=MED Medizin,OU=Uni-Halle,DC=xd,DC=uni-halle,DC=de"
+groupName = "befunddatenbank"
+
